@@ -737,7 +737,7 @@ class CustomScanIssue (IScanIssue):
 		return self._severity
 
 	def getConfidence(self):
-		return "Firm"
+		return "Tentative"
 
 	def getIssueBackground(self):
 		return extentionName + " sent a request and got 403 response. " + extentionName + " sent another request and got 2XX-3XX response, this may indicate a misconfiguration on the server side that allows access to forbidden pages."
