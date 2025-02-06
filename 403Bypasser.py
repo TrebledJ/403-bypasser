@@ -493,6 +493,15 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		for rowIndex in range(self.frm.headerPayloadsTable.getRowCount()):
 			headerPayloadsFromTable.append(str(self.frm.headerPayloadsTable.getValueAt(rowIndex, 0)))
 
+		# add request-dependent payloads, e.g. Referer: http://{host}:{port}/
+		url = self.helpers.analyzeRequest(baseRequestResponse).getUrl()
+		scheme, port, host = url.getProtocol(), url.getPort(), url.getHost()
+		if (scheme == 'https' and port == 443) or (scheme == 'http' and port == 80):
+			refurl = '{}://{}/'.format(scheme, host)
+		else:
+			refurl = '{}://{}:{}/'.format(scheme, host, port)
+		headerPayloadsFromTable.append('Referer: {}'.format(refurl))
+
 		for payload in headerPayloadsFromTable:
 			payload = payload.rstrip('\n')
 			result = self.tryBypassWithHeaderPayload(baseRequestResponse, payload, httpService)
