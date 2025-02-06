@@ -452,38 +452,6 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		findings = []
 		httpService = baseRequestResponse.getHttpService()
 
-		#test for query-based issues
-		queryPayloadsFromTable = []
-		for rowIndex in range(self.frm.queryPayloadsTable.getRowCount()):
-			queryPayloadsFromTable.append(str(self.frm.queryPayloadsTable.getValueAt(rowIndex, 0)))
-
-		for payload in queryPayloadsFromTable:
-			payload = payload.rstrip('\n')
-			result = self.tryBypassWithQueryPayload(baseRequestResponse, payload, httpService)
-			if result != None:
-				queryPayloadsResults += result
-
-		#process query-based results
-		if len(queryPayloadsResults) > 0:
-			issueDetails = []
-			issueHttpMessages = []
-			issueHttpMessages.append(baseRequestResponse)
-
-			for issue in queryPayloadsResults:
-				issueDetails.append(issue[0])
-				issueHttpMessages.append(issue[1])
-
-
-			findings.append(
-				CustomScanIssue(
-				httpService,
-				self.helpers.analyzeRequest(baseRequestResponse).getUrl(),
-				issueHttpMessages,
-				"Possible 403 Bypass",
-				"<table><tr><td>Request #</td><td>URL</td><td>Status Code</td><td>Content Length</td></tr>" + "".join(issueDetails) + "</table>",
-				"High",
-				)
-				)
 
 		#test for header-based issues
 		global requestNum
@@ -529,8 +497,10 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 				"High",
 				)
 				)
-
-		#replace GET with POST and empty Content-Length
+			
+		
+		# test for method-based issues
+		# replace GET with POST and empty Content-Length
 		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
 		requestHeaders = requestInfo.getHeaders()
 		if requestHeaders[0].startswith("GET"):
@@ -555,7 +525,9 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 					"High",
 					)
 					)
-
+				
+		
+		# test for protocol-based issues
 		#change the protocol to HTTP/1.0 and remove all other headers
 		downgradedHttpResult = self.tryBypassWithDowngradedHttpAndNoHeaders(baseRequestResponse, httpService)
 		if downgradedHttpResult != None:
@@ -576,6 +548,41 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 				"High",
 				)
 				)
+
+
+		#test for query-based issues
+		queryPayloadsFromTable = []
+		for rowIndex in range(self.frm.queryPayloadsTable.getRowCount()):
+			queryPayloadsFromTable.append(str(self.frm.queryPayloadsTable.getValueAt(rowIndex, 0)))
+
+		for payload in queryPayloadsFromTable:
+			payload = payload.rstrip('\n')
+			result = self.tryBypassWithQueryPayload(baseRequestResponse, payload, httpService)
+			if result != None:
+				queryPayloadsResults += result
+
+		#process query-based results
+		if len(queryPayloadsResults) > 0:
+			issueDetails = []
+			issueHttpMessages = []
+			issueHttpMessages.append(baseRequestResponse)
+
+			for issue in queryPayloadsResults:
+				issueDetails.append(issue[0])
+				issueHttpMessages.append(issue[1])
+
+
+			findings.append(
+				CustomScanIssue(
+				httpService,
+				self.helpers.analyzeRequest(baseRequestResponse).getUrl(),
+				issueHttpMessages,
+				"Possible 403 Bypass",
+				"<table><tr><td>Request #</td><td>URL</td><td>Status Code</td><td>Content Length</td></tr>" + "".join(issueDetails) + "</table>",
+				"High",
+				)
+				)
+
 
 		if findings:
 			return findings
