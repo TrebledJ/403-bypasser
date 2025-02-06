@@ -280,7 +280,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 
 			newRequestStatusCode = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getStatusCode())
 
-			if newRequestStatusCode == "200":
+			if int(newRequestStatusCode) < 400:
 				originalRequestUrl = str(request.getUrl())
 				vulnerableReuqestUrl = originalRequestUrl.replace(requestPath,pathToTest)
 
@@ -330,7 +330,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		newRequestResult = self.callbacks.makeHttpRequest(httpService, newRequest)
 		newRequestStatusCode = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getStatusCode())
 
-		if newRequestStatusCode == "200":
+		if int(newRequestStatusCode) < 400:
 			originalRequestUrl = str(baseRequestResponse.getUrl())
 			responseHeaders = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getHeaders()).split(",")
 			resultContentLength = "No CL in response"
@@ -378,7 +378,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		newRequestResult = self.callbacks.makeHttpRequest(httpService, newRequest)
 		newRequestStatusCode = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getStatusCode())
 
-		if newRequestStatusCode == "200":
+		if int(newRequestStatusCode) < 400:
 			responseHeaders = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getHeaders()).split(",")
 			requestUrl = str(baseRequestResponse.getUrl())
 			resultContentLength = "No CL in response"
@@ -412,7 +412,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		newRequestResult = self.callbacks.makeHttpRequest(httpService, newRequest)
 		newRequestStatusCode = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getStatusCode())
 
-		if newRequestStatusCode == "200":
+		if int(newRequestStatusCode) < 400:
 			responseHeaders = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getHeaders()).split(",")
 			requestUrl = str(baseRequestResponse.getUrl())
 			resultContentLength = "No CL in response"
@@ -457,7 +457,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		newRequestResult = self.callbacks.makeHttpRequest(httpService, newRequest)
 		newRequestStatusCode = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getStatusCode())
 
-		if newRequestStatusCode == "200":
+		if int(newRequestStatusCode) < 400:
 			responseHeaders = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getHeaders()).split(",")
 			requestUrl = str(baseRequestResponse.getUrl())
 			resultContentLength = "No CL in response"
@@ -740,7 +740,7 @@ class CustomScanIssue (IScanIssue):
 		return "Firm"
 
 	def getIssueBackground(self):
-		return extentionName + " sent a request and got 403 response. " + extentionName + " sent another request and got 200 response, this may indicate a misconfiguration on the server side that allows access to forbidden pages."
+		return extentionName + " sent a request and got 403 response. " + extentionName + " sent another request and got 2XX-3XX response, this may indicate a misconfiguration on the server side that allows access to forbidden pages."
 
 	def getRemediationBackground(self):
 		pass
