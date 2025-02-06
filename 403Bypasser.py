@@ -257,18 +257,28 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		requestPath = request.getUrl().getPath()
 		payloads = self.generatePayloads(requestPath, payload)
 
+		requestInfo = self.helpers.analyzeRequest(request)
+		headers = requestInfo.getHeaders()
+		firstline = headers[0]
 
 		originalRequest = self.helpers.bytesToString(request.getRequest())
 		for pathToTest in payloads:
+			headers[0] = firstline.replace(requestPath, pathToTest)
+			headersAsJavaSublist = ArrayList()
+			for header in headers:
+				headersAsJavaSublist.add(String(header))
+			
+			requestBody = originalRequest[requestInfo.getBodyOffset():]
+
+			newRequest = self.helpers.buildHttpMessage(headersAsJavaSublist, requestBody)
 			try:
-				newRequest = originalRequest.replace(requestPath, pathToTest)
 				newRequestResult = self.callbacks.makeHttpRequest(httpService, newRequest)
-				newRequestStatusCode = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getStatusCode())
 			except:
 				print("No response from server")
 				newRequestStatusCode = None
-				pass
+				continue
 
+			newRequestStatusCode = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getStatusCode())
 
 			if newRequestStatusCode == "200":
 				originalRequestUrl = str(request.getUrl())
