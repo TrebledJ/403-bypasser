@@ -321,7 +321,6 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 			headers.append(payload)
 
 		requestBody = baseRequestResponse.getRequest()[requestInfo.getBodyOffset():]
-		
 
 		headersAsJavaSublist = ArrayList()
 		for header in headers:
@@ -352,12 +351,22 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		else:
 			return None
 
-	def tryBypassWithPOSTAndEmptyCL(self, baseRequestResponse, httpService):
+	def tryBypassWithMethod(self, baseRequestResponse, method, httpService):
 		issue = []
 		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
 		headers = requestInfo.getHeaders()
-		headers[0] = headers[0].replace("GET", "POST")
-		headers.append("Content-Length: 0")
+		originalMethod = headers[0].split()[0]
+		headers[0] = headers[0].replace(originalMethod, method)
+
+		if method.lower() == 'post':
+			newHeader = 'Content-Length: 0'
+			headerAlreadyAdded = False
+			for index, header in enumerate(headers):
+				if header.split(" ")[0].lower() == newHeader.split(" ")[0].lower(): #if header already exist
+					headers[index] = newHeader
+					headerAlreadyAdded = True
+			if headerAlreadyAdded == False:
+				headers.append(newHeader)
 
 		headersAsJavaSublist = ArrayList()
 		for header in headers:
@@ -381,14 +390,14 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 						resultContentLength = resultContentLength.rstrip(']')
 
 			requestNum = 2
-			issue.append("<tr><td>" + str(requestNum) + "</td><td>" + requestUrl + "</td> <td>" + newRequestStatusCode + "</td> <td>" + resultContentLength + "</td></tr>")
+			issue.append("<tr><td>" + str(requestNum) + "</td><td>" + requestUrl + "</td><td>" + method + "</td><td>" + newRequestStatusCode + "</td> <td>" + resultContentLength + "</td></tr>")
 			issue.append(newRequestResult)
 
 		if len(issue) > 0:
 			return issue
 		else:
 			return None
-
+		
 	def tryBypassWithDowngradedHttpAndNoHeaders(self, baseRequestResponse, httpService):
 		issue = []
 		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
@@ -398,6 +407,51 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		requestBody = baseRequestResponse.getRequest()[requestInfo.getBodyOffset():]
 		headersAsJavaSublist = ArrayList()
 		headersAsJavaSublist.add(String(newHeader))
+
+		newRequest = self.helpers.buildHttpMessage(headersAsJavaSublist, requestBody)
+		newRequestResult = self.callbacks.makeHttpRequest(httpService, newRequest)
+		newRequestStatusCode = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getStatusCode())
+
+		if newRequestStatusCode == "200":
+			responseHeaders = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getHeaders()).split(",")
+			requestUrl = str(baseRequestResponse.getUrl())
+			resultContentLength = "No CL in response"
+
+			for header in responseHeaders:
+				if "Content-Length: " in header:
+					resultContentLength = header[17:]
+					if resultContentLength[-1] == ']': # happens if CL header is the last header in response
+						resultContentLength = resultContentLength.rstrip(']')
+
+			requestNum = 2
+			issue = []
+			issue.append("<tr><td>" + str(requestNum) + "</td><td>" + requestUrl + "</td> <td>" + newRequestStatusCode + "</td> <td>" + resultContentLength + "</td></tr>")
+			issue.append(newRequestResult)
+
+		if len(issue) > 0:
+			return issue
+		else:
+			return None
+
+
+	def tryBypassWithUserAgent(self, baseRequestResponse, agent, httpService):
+		issue = []
+
+		headerAlreadyAdded = False
+		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
+		headers = requestInfo.getHeaders()
+		for index, header in enumerate(headers):
+			if header.lower().startswith('user-agent'): #if header already exist
+				headers[index] = 'User-Agent: {}'.format(agent)
+				headerAlreadyAdded = True
+
+		if headerAlreadyAdded == False:
+			headers.append('User-Agent: {}'.format(agent))
+
+		requestBody = baseRequestResponse.getRequest()[requestInfo.getBodyOffset():]
+		headersAsJavaSublist = ArrayList()
+		for header in headers:
+			headersAsJavaSublist.add(String(header))
 
 		newRequest = self.helpers.buildHttpMessage(headersAsJavaSublist, requestBody)
 		newRequestResult = self.callbacks.makeHttpRequest(httpService, newRequest)
@@ -501,31 +555,96 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		
 		# test for method-based issues
 		# replace GET with POST and empty Content-Length
+		methodResults = []
+		methods = [
+			'GET', 'POST', 'OPTIONS', 'TRACE', 'DEBUG', 'HEAD', 'CONNECT'
+		]
 		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
 		requestHeaders = requestInfo.getHeaders()
-		if requestHeaders[0].startswith("GET"):
-			postAndEmptyCLResult = self.tryBypassWithPOSTAndEmptyCL(baseRequestResponse, httpService)
+		for method in methods:
+			if requestHeaders[0].startswith(method):
+				continue
+			result = self.tryBypassWithMethod(baseRequestResponse, method, httpService)
+			if result != None:
+				methodResults += result
 
-			if postAndEmptyCLResult != None:
-				issueDetails = []
-				issueHttpMessages = []
+		if len(methodResults) > 0:
+			issueDetails = []
+			issueHttpMessages = []
+			issueHttpMessages.append(baseRequestResponse)
 
-				issueHttpMessages.append(baseRequestResponse)
-				issueDetails.append(postAndEmptyCLResult[0])
-				issueHttpMessages.append(postAndEmptyCLResult[1])
+			for issue in methodResults:
+				issueDetails.append(issue[0])
+				issueHttpMessages.append(issue[1])
 
+			findings.append(
+				CustomScanIssue(
+				httpService,
+				self.helpers.analyzeRequest(baseRequestResponse).getUrl(),
+				issueHttpMessages,
+				"Possible 403 Bypass - Method Based",
+				"<table><tr><td>Request #</td><td>URL</td><td>Method</td><td>Status Code</td><td>Content Length</td></tr>" + "".join(issueDetails) + "</table>",
+				"High",
+				)
+				)
+			
+		
+		# test for agent-based bypasses
 
-				findings.append(
-					CustomScanIssue(
-					httpService,
-					self.helpers.analyzeRequest(baseRequestResponse).getUrl(),
-					issueHttpMessages,
-					"Possible 403 Bypass - Different Request Method",
-					"<table><tr><td>Request #</td><td>URL</td><td>Status Code</td><td>Content Length</td></tr>" + "".join(issueDetails) + "</table>",
-					"High",
-					)
-					)
-				
+		agentResults = []
+		agents = [
+			# Desktop
+			# Chrome, Windows
+			'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/602.2.4 (KHTML, like Gecko) Chrome/95.5.4935.611 Safari/602.2.4',
+			# Chrome, macOS
+			'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4758.102 Safari/537.36',
+			# Firefox, Linux
+			'Mozilla/5.0 (X11; Ubuntu; Linux i686; rv:19.0) Gecko/20100101 Firefox/19.0',
+
+			# Mobile
+			# Safari, iOS
+			'Mozilla/5.0 (iPhone; CPU iPhone OS 13_0 like Mac OS X) AppleWebKit/609.0.8 (KHTML, like Gecko) Mobile/14A25 Safari/609.0.8',
+			# Chrome, Android, Samsung
+			'Mozilla/5.0 (Linux; U; Android-4.0.3; en-us; Galaxy Nexus Build/IML74K) AppleWebKit/535.7 (KHTML, like Gecko) CrMo/16.0.912.75 Mobile Safari/535.7',
+			# Firefox, Android, Lenovo
+			'Mozilla/5.0 (Android 11; Mobile; Lenovo YT-X705X; rv:129.0) Gecko/129.0 Firefox/129.0',
+			
+			# Uncommon
+			'Mozilla/5.0 (Linux; U; Android 9.1; Z062D) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/14.0.5611.349 Mobile Safari/537.36 OPR/13.10.3262.690',
+			'Mozilla/5.0 (Linux; U; Android 4.0.0; en-us; KFMAWI Build/KM21) AppleWebKit/537.36 (KHTML, like Gecko) Silk/3.49 like Chrome/126.9.768.105 Safari/537.36',
+			'Mozilla/5.0 (Linux; Android 9; JDN2-AL50 Build/HUAWEIJDN2-AL50; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/76.0.3809.89 Mobile Safari/537.36 T7/12.13.0 SP-engine/2.29.0 matrixstyle/0 lite baiduboxapp/5.8.0.10 (Baidu; P1 9) NABar/1.',
+		]
+		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
+		requestHeaders = requestInfo.getHeaders()
+		for agent in agents:
+			if requestHeaders[0].startswith(agent):
+				continue
+
+			result = self.tryBypassWithUserAgent(baseRequestResponse, agent, httpService)
+			if result != None:
+				agentResults += result
+
+		if len(agentResults) > 0:
+			issueDetails = []
+			issueHttpMessages = []
+			issueHttpMessages.append(baseRequestResponse)
+
+			for issue in agentResults:
+				issueDetails.append(issue[0])
+				issueHttpMessages.append(issue[1])
+
+			findings.append(
+				CustomScanIssue(
+				httpService,
+				self.helpers.analyzeRequest(baseRequestResponse).getUrl(),
+				issueHttpMessages,
+				"Possible 403 Bypass - Method Based",
+				"<table><tr><td>Request #</td><td>URL</td><td>Method</td><td>Status Code</td><td>Content Length</td></tr>" + "".join(issueDetails) + "</table>",
+				"High",
+				)
+				)
+		
+
 		
 		# test for protocol-based issues
 		#change the protocol to HTTP/1.0 and remove all other headers
