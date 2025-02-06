@@ -528,7 +528,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 			payload = payload.rstrip('\n')
 			result = self.tryBypassWithHeaderPayload(baseRequestResponse, payload, httpService)
 			if result != None:
-				headerPayloadsResults += result
+				headerPayloadsResults += [result]
 
 		#process header-based results
 
@@ -566,7 +566,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 				continue
 			result = self.tryBypassWithMethod(baseRequestResponse, method, httpService)
 			if result != None:
-				methodResults += result
+				methodResults += [result]
 
 		if len(methodResults) > 0:
 			issueDetails = []
@@ -622,7 +622,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 
 			result = self.tryBypassWithUserAgent(baseRequestResponse, agent, httpService)
 			if result != None:
-				agentResults += result
+				agentResults += [result]
 
 		if len(agentResults) > 0:
 			issueDetails = []
