@@ -206,6 +206,9 @@ class Result:
 					print('Conflicting response size encountered!')
 					print('From raw analysis: {}'.format(self.responsesize))
 					print('From Content-Length header: {}'.format(responsesizeFromHeader))
+					reqInfo = helpers.analyzeRequest(self.httpRequestResponse.getRequest())
+					print(reqInfo.getHeaders()[0])
+					print('Status Code: {}'.format(self.statuscode))
 		
 		# use a deterministic hash function
 		self.contenthash = hashlib.md5(respBody).hexdigest()
@@ -356,10 +359,9 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 
 			newRequest = self.helpers.buildHttpMessage(headers, requestBody)
 			try:
-				# TODO: add try-except to other makeHttpRequest calls
 				newRequestResponse = self.callbacks.makeHttpRequest(httpService, newRequest)
 			except:
-				print("No response from server: {}".format(headers[0]))
+				print("No response from server: (path-based bypass) {}".format(headers[0]))
 				continue
 
 			if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
@@ -381,7 +383,11 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		requestBody = baseRequestResponse.getRequest()[requestInfo.getBodyOffset():]
 
 		newRequest = self.helpers.buildHttpMessage(headers, requestBody)
-		newRequestResponse = self.callbacks.makeHttpRequest(httpService, newRequest)
+		try:
+			newRequestResponse = self.callbacks.makeHttpRequest(httpService, newRequest)
+		except:
+			print("No response from server: (header-based bypass) {}".format(payload))
+			return []
 
 		if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
 			return [
@@ -406,7 +412,11 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 
 		requestBody = baseRequestResponse.getRequest()[requestInfo.getBodyOffset():]
 		newRequest = self.helpers.buildHttpMessage(headers, requestBody)
-		newRequestResponse = self.callbacks.makeHttpRequest(httpService, newRequest)
+		try:
+			newRequestResponse = self.callbacks.makeHttpRequest(httpService, newRequest)
+		except:
+			print("No response from server: (method-based bypass) {}".format(method))
+			return []
 
 		if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
 			return [
@@ -429,7 +439,11 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 
 		requestBody = baseRequestResponse.getRequest()[requestInfo.getBodyOffset():]
 		newRequest = self.helpers.buildHttpMessage(headers, requestBody)
-		newRequestResponse = self.callbacks.makeHttpRequest(httpService, newRequest)
+		try:
+			newRequestResponse = self.callbacks.makeHttpRequest(httpService, newRequest)
+		except:
+			print("No response from server: (agent-based bypass) {}".format(agent))
+			return []
 
 		if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
 			return [
@@ -454,7 +468,11 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		headers.add(String(newHeader))
 
 		newRequest = self.helpers.buildHttpMessage(headers, requestBody)
-		newRequestResponse = self.callbacks.makeHttpRequest(httpService, newRequest)
+		try:
+			newRequestResponse = self.callbacks.makeHttpRequest(httpService, newRequest)
+		except:
+			print("No response from server: (downgrade bypass)")
+			return []
 
 		if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
 			return [
