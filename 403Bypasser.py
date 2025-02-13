@@ -298,6 +298,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		newRespCode = newRespInfo.getStatusCode()
 		newRespSize = len(self.helpers.bytesToString(newResp)) - newRespInfo.getBodyOffset()
 
+		# TODO: should we report something even if statuscode >= 400 but size is different?
 		return newRespCode < 400 and (ogRespCode != newRespCode or ogRespSize != newRespSize)
 
 	def isInteresting(self, responseInfo):
@@ -611,6 +612,10 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 			'Mozilla/5.0 (Linux; U; Android 9.1; Z062D) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/14.0.5611.349 Mobile Safari/537.36 OPR/13.10.3262.690',
 			'Mozilla/5.0 (Linux; U; Android 4.0.0; en-us; KFMAWI Build/KM21) AppleWebKit/537.36 (KHTML, like Gecko) Silk/3.49 like Chrome/126.9.768.105 Safari/537.36',
 			'Mozilla/5.0 (Linux; Android 9; JDN2-AL50 Build/HUAWEIJDN2-AL50; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/76.0.3809.89 Mobile Safari/537.36 T7/12.13.0 SP-engine/2.29.0 matrixstyle/0 lite baiduboxapp/5.8.0.10 (Baidu; P1 9) NABar/1.',
+
+			# Tools
+			'curl/8.0.0',
+			'PostmanRuntime/7.29.0',
 		]
 		for agent in agents:
 			result = self.tryBypassWithUserAgent(baseRequestResponse, agent, baseRequestResponse.getHttpService())
