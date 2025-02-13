@@ -8,6 +8,7 @@ import java.lang.String as String
 from java.lang import Short
 
 import thread
+import hashlib
 
 queryPayloadsFile = open('query payloads.txt', "r")
 queryPayloadsFromFile = queryPayloadsFile.readlines()
@@ -177,6 +178,73 @@ class uiTab(JFrame):
 		)
 
 
+class Result:
+	def __init__(self, url, data, httpRequestResponse, helpers):
+		self.url = url
+		self.data = data
+		self.httpRequestResponse = httpRequestResponse
+
+		response = httpRequestResponse.getResponse()
+		self.analyseResp(response, helpers)
+		# self.statuscode = statuscode
+		# self.responsesize = responsesize
+		# self.contenthash = contenthash
+
+	def analyseResp(self, response, helpers):
+		respInfo = helpers.analyzeResponse(response)
+		self.statuscode = respInfo.getStatusCode()
+		respString = helpers.bytesToString(response)
+		respBody = respString[respInfo.getBodyOffset():]
+		self.responsesize = len(respBody)
+
+		respHeaders = respInfo.getHeaders()
+		for hdr in respHeaders:
+			hdr = str(hdr)
+			if hdr.startswith("Content-Length:"):
+				responsesizeFromHeader = int(hdr[16:])
+				if self.responsesize != responsesizeFromHeader:
+					print('Conflicting response size encountered!')
+					print('From raw analysis: {}'.format(self.responsesize))
+					print('From Content-Length header: {}'.format(responsesizeFromHeader))
+		
+		# use a deterministic hash function
+		self.contenthash = hashlib.md5(respBody).hexdigest()
+
+
+	def renderRow(self, reqNum):
+		cols = [
+			str(reqNum),
+			self.url,
+			self.data,
+			str(self.statuscode),
+			str(self.responsesize),
+		]
+		return "<tr>" + "".join("<td>" + col + "</td>" for col in cols) + "</tr>"
+	
+	@staticmethod
+	def deduplicateResults(resultsList):
+		seen = set()
+		deduped = []
+		for res in resultsList:
+			if res.contenthash in seen:
+				continue
+			seen.add(res.contenthash)
+			deduped.append(res)
+		return deduped
+	
+	@staticmethod
+	def renderResultsToTable(resultsList, startReqNum=2, dataHeader=""):
+		headers = [
+			"Request #",
+			"URL",
+			dataHeader,
+			"Status Code",
+			"Response Size"
+		]
+		headerrow = "<tr>" + "".join("<td>" + col + "</td>" for col in headers) + "</tr>"
+		data = "".join(res.renderRow(reqNum) for reqNum, res in enumerate(resultsList, startReqNum))
+		return "<table>" + headerrow + data + "</table>"
+		
 
 class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 	def registerExtenderCallbacks(self, callbacks):
@@ -216,12 +284,14 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		return None
 
 
-	def isInteresting(self, response):
-		responseCode = response.getStatusCode()
-		if responseCode == 403:
-			return True
-		else:
-			return False
+	def isPositive(self, responseInfo):
+		responseCode = responseInfo.getStatusCode()
+		return responseCode < 400
+
+	def isInteresting(self, responseInfo):
+		responseCode = responseInfo.getStatusCode()
+		# TODO: extend scope of interesting responses
+		return responseCode == 403
 
 	def findAllCharIndexesInString(self,s, ch):
 		return [i for i, ltr in enumerate(s) if ltr == ch]
@@ -249,10 +319,28 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		payloads.append(path + "/" + payload + "/")
 
 		return payloads
+	
+	@staticmethod
+	def addOrReplaceHeader(headers, newHeader):
+		"""Returns a new ArrayList of headers containing the new header."""
+		hdrsArrayList = ArrayList()
+		hdrName = newHeader.split(" ")[0].lower()
+		hdrAdded = False
+		for header in headers:
+			if header.lower().startswith(hdrName):
+				hdrsArrayList.add(String(newHeader))
+				hdrAdded = True
+			else:
+				hdrsArrayList.add(String(header))
+
+		if hdrAdded == False:
+			hdrsArrayList.add(String(newHeader))
+
+		return hdrsArrayList
+
 
 	def tryBypassWithQueryPayload(self, request, payload, httpService):
 		results = []
-		#each result element is an array of [detail,httpMessage]
 
 		requestPath = request.getUrl().getPath()
 		payloads = self.generatePayloads(requestPath, payload)
@@ -263,253 +351,168 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 
 		originalRequest = self.helpers.bytesToString(request.getRequest())
 		for pathToTest in payloads:
-			headers[0] = firstline.replace(requestPath, pathToTest)
-			headersAsJavaSublist = ArrayList()
-			for header in headers:
-				headersAsJavaSublist.add(String(header))
-			
+			headers[0] = firstline.replace(requestPath, pathToTest, 1)
 			requestBody = originalRequest[requestInfo.getBodyOffset():]
 
-			newRequest = self.helpers.buildHttpMessage(headersAsJavaSublist, requestBody)
+			newRequest = self.helpers.buildHttpMessage(headers, requestBody)
 			try:
-				newRequestResult = self.callbacks.makeHttpRequest(httpService, newRequest)
+				# TODO: add try-except to other makeHttpRequest calls
+				newRequestResponse = self.callbacks.makeHttpRequest(httpService, newRequest)
 			except:
-				print("No response from server")
-				newRequestStatusCode = None
+				print("No response from server: {}".format(headers[0]))
 				continue
 
-			newRequestStatusCode = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getStatusCode())
+			if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
+				results.append(Result(
+					url=pathToTest.replace(payload, "<b>" + payload + "</b>"),
+					data="",
+					httpRequestResponse=newRequestResponse,
+					helpers=self.helpers,
+				))
 
-			if int(newRequestStatusCode) < 400:
-				originalRequestUrl = str(request.getUrl())
-				vulnerableReuqestUrl = originalRequestUrl.replace(requestPath,pathToTest)
-
-				responseHeaders = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getHeaders()).split(",")
-				resultContentLength = "No CL in response"
-				for header in responseHeaders:
-					if "Content-Length: " in header:
-						resultContentLength = header[17:]
-						if resultContentLength[-1] == ']': # happens if CL header is the last header in response
-							resultContentLength = resultContentLength.rstrip(']')
-
-				issue = []
-				global requestNum
-
-				issue.append("<tr><td>" + str(requestNum) + "</td><td>" + vulnerableReuqestUrl.replace(payload, "<b>" + payload + "</b>") + "</td> <td>" + newRequestStatusCode + "</td> <td>" + resultContentLength + "</td></tr>")
-				issue.append(newRequestResult)
-				results.append(issue)
-				requestNum += 1
-
-		if len(results) > 0:
-			return results
-		else:
-			return None
+		return results
+	
 
 	def tryBypassWithHeaderPayload(self, baseRequestResponse, payload, httpService):
-		results = []
-		#each result element is an array of [detail,httpMessage]
+		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
+		headers = requestInfo.getHeaders()
+		headers = self.addOrReplaceHeader(headers, payload)
 
+		requestBody = baseRequestResponse.getRequest()[requestInfo.getBodyOffset():]
+
+		newRequest = self.helpers.buildHttpMessage(headers, requestBody)
+		newRequestResponse = self.callbacks.makeHttpRequest(httpService, newRequest)
+
+		if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
+			return [
+				Result(
+					url=str(baseRequestResponse.getUrl().getPath()),
+					data=payload.split(":")[0], # Display specific header name.
+					httpRequestResponse=newRequestResponse,
+					helpers=self.helpers,
+				)
+			]
+
+		return []
+
+
+	def tryBypassWithMethod(self, baseRequestResponse, method, httpService):
+		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
+		headers = requestInfo.getHeaders()
+		headers[0] = method + " " + " ".join(headers[0].split(" ")[1:])
+
+		if method.upper() == 'POST':
+			headers = self.addOrReplaceHeader(headers, "Content-Length: 0")
+
+		requestBody = baseRequestResponse.getRequest()[requestInfo.getBodyOffset():]
+		newRequest = self.helpers.buildHttpMessage(headers, requestBody)
+		newRequestResponse = self.callbacks.makeHttpRequest(httpService, newRequest)
+
+		if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
+			return [
+				Result(
+					url=str(baseRequestResponse.getUrl().getPath()),
+					data=method,
+					httpRequestResponse=newRequestResponse,
+					helpers=self.helpers,
+				)
+			]
+
+		return []
+
+
+	def tryBypassWithUserAgent(self, baseRequestResponse, agent, httpService):
 		headerAlreadyAdded = False
 		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
 		headers = requestInfo.getHeaders()
-		for index, header in enumerate(headers):
-			if header.split(" ")[0].lower() == payload.split(" ")[0].lower(): #if header already exist
-				headers[index] = payload
-				headerAlreadyAdded = True
-
-		if headerAlreadyAdded == False:
-			headers.append(payload)
+		headers = self.addOrReplaceHeader(headers, 'User-Agent: {}'.format(agent))
 
 		requestBody = baseRequestResponse.getRequest()[requestInfo.getBodyOffset():]
+		newRequest = self.helpers.buildHttpMessage(headers, requestBody)
+		newRequestResponse = self.callbacks.makeHttpRequest(httpService, newRequest)
 
-		headersAsJavaSublist = ArrayList()
-		for header in headers:
-			headersAsJavaSublist.add(String(header))
+		if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
+			return [
+				Result(
+					url=str(baseRequestResponse.getUrl().getPath()),
+					data=agent if len(agent) < 40 else agent[:15] + "..." + agent[-15:],
+					httpRequestResponse=newRequestResponse,
+					helpers=self.helpers,
+				)
+			]
 
-		newRequest = self.helpers.buildHttpMessage(headersAsJavaSublist, requestBody)
-		newRequestResult = self.callbacks.makeHttpRequest(httpService, newRequest)
-		newRequestStatusCode = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getStatusCode())
-
-		if int(newRequestStatusCode) < 400:
-			originalRequestUrl = str(baseRequestResponse.getUrl())
-			responseHeaders = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getHeaders()).split(",")
-			resultContentLength = "No CL in response"
-			for header in responseHeaders:
-				if "Content-Length: " in header:
-					resultContentLength = header[17:]
-					if resultContentLength[-1] == ']': # happens if CL header is the last header in response
-						resultContentLength = resultContentLength.rstrip(']')
-
-			issue = []
-
-			issue.append("<tr><td>" + str(requestNum) + "</td><td>" + originalRequestUrl + "</td><td>" + payload + "</td> <td>" + newRequestStatusCode + "</td> <td>" + resultContentLength + "</td></tr>")
-			issue.append(newRequestResult)
-			results.append(issue)
-
-		if len(results) > 0:
-			return results
-		else:
-			return None
-
-	def tryBypassWithMethod(self, baseRequestResponse, method, httpService):
-		issue = []
-		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
-		headers = requestInfo.getHeaders()
-		originalMethod = headers[0].split()[0]
-		headers[0] = headers[0].replace(originalMethod, method)
-
-		if method.lower() == 'post':
-			newHeader = 'Content-Length: 0'
-			headerAlreadyAdded = False
-			for index, header in enumerate(headers):
-				if header.split(" ")[0].lower() == newHeader.split(" ")[0].lower(): #if header already exist
-					headers[index] = newHeader
-					headerAlreadyAdded = True
-			if headerAlreadyAdded == False:
-				headers.append(newHeader)
-
-		headersAsJavaSublist = ArrayList()
-		for header in headers:
-			headersAsJavaSublist.add(String(header))
-
-		requestBody = baseRequestResponse.getRequest()[requestInfo.getBodyOffset():]
-
-		newRequest = self.helpers.buildHttpMessage(headersAsJavaSublist, requestBody)
-		newRequestResult = self.callbacks.makeHttpRequest(httpService, newRequest)
-		newRequestStatusCode = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getStatusCode())
-
-		if int(newRequestStatusCode) < 400:
-			responseHeaders = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getHeaders()).split(",")
-			requestUrl = str(baseRequestResponse.getUrl())
-			resultContentLength = "No CL in response"
-
-			for header in responseHeaders:
-				if "Content-Length: " in header:
-					resultContentLength = header[17:]
-					if resultContentLength[-1] == ']': # happens if CL header is the last header in response
-						resultContentLength = resultContentLength.rstrip(']')
-
-			requestNum = 2
-			issue.append("<tr><td>" + str(requestNum) + "</td><td>" + requestUrl + "</td><td>" + method + "</td><td>" + newRequestStatusCode + "</td> <td>" + resultContentLength + "</td></tr>")
-			issue.append(newRequestResult)
-
-		if len(issue) > 0:
-			return issue
-		else:
-			return None
+		return []
 		
+	
 	def tryBypassWithDowngradedHttpAndNoHeaders(self, baseRequestResponse, httpService):
-		issue = []
 		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
 		headers = requestInfo.getHeaders()
 		newHeader = headers[0].replace("HTTP/1.1", "HTTP/1.0")
 
 		requestBody = baseRequestResponse.getRequest()[requestInfo.getBodyOffset():]
-		headersAsJavaSublist = ArrayList()
-		headersAsJavaSublist.add(String(newHeader))
+		headers = ArrayList()
+		headers.add(String(newHeader))
 
-		newRequest = self.helpers.buildHttpMessage(headersAsJavaSublist, requestBody)
-		newRequestResult = self.callbacks.makeHttpRequest(httpService, newRequest)
-		newRequestStatusCode = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getStatusCode())
+		newRequest = self.helpers.buildHttpMessage(headers, requestBody)
+		newRequestResponse = self.callbacks.makeHttpRequest(httpService, newRequest)
 
-		if int(newRequestStatusCode) < 400:
-			responseHeaders = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getHeaders()).split(",")
-			requestUrl = str(baseRequestResponse.getUrl())
-			resultContentLength = "No CL in response"
+		if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
+			return [
+				Result(
+					url=str(baseRequestResponse.getUrl().getPath()),
+					data="",
+					httpRequestResponse=newRequestResponse,
+					helpers=self.helpers,
+				)
+			]
 
-			for header in responseHeaders:
-				if "Content-Length: " in header:
-					resultContentLength = header[17:]
-					if resultContentLength[-1] == ']': # happens if CL header is the last header in response
-						resultContentLength = resultContentLength.rstrip(']')
-
-			requestNum = 2
-			issue = []
-			issue.append("<tr><td>" + str(requestNum) + "</td><td>" + requestUrl + "</td> <td>" + newRequestStatusCode + "</td> <td>" + resultContentLength + "</td></tr>")
-			issue.append(newRequestResult)
-
-		if len(issue) > 0:
-			return issue
-		else:
-			return None
+		return []
 
 
-	def tryBypassWithUserAgent(self, baseRequestResponse, agent, httpService):
-		issue = []
+	def makeScanIssueFromResults(self, baseRequestResponse, results, title, severity, dataHeader="Data", dedup=True):
+		if len(results) == 0:
+			return []
+	
+		if dedup:
+			results = Result.deduplicateResults(results)
 
-		headerAlreadyAdded = False
-		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
-		headers = requestInfo.getHeaders()
-		for index, header in enumerate(headers):
-			if header.lower().startswith('user-agent'): #if header already exist
-				headers[index] = 'User-Agent: {}'.format(agent)
-				headerAlreadyAdded = True
+		issueHttpMessages = [baseRequestResponse] + [res.httpRequestResponse for res in results]
+		issueDetails = Result.renderResultsToTable(results, 2, dataHeader=dataHeader)
 
-		if headerAlreadyAdded == False:
-			headers.append('User-Agent: {}'.format(agent))
-
-		requestBody = baseRequestResponse.getRequest()[requestInfo.getBodyOffset():]
-		headersAsJavaSublist = ArrayList()
-		for header in headers:
-			headersAsJavaSublist.add(String(header))
-
-		newRequest = self.helpers.buildHttpMessage(headersAsJavaSublist, requestBody)
-		newRequestResult = self.callbacks.makeHttpRequest(httpService, newRequest)
-		newRequestStatusCode = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getStatusCode())
-
-		if int(newRequestStatusCode) < 400:
-			responseHeaders = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getHeaders()).split(",")
-			requestUrl = str(baseRequestResponse.getUrl())
-			resultContentLength = "No CL in response"
-
-			for header in responseHeaders:
-				if "Content-Length: " in header:
-					resultContentLength = header[17:]
-					if resultContentLength[-1] == ']': # happens if CL header is the last header in response
-						resultContentLength = resultContentLength.rstrip(']')
-
-			requestNum = 2
-			issue = []
-			issue.append("<tr><td>" + str(requestNum) + "</td><td>" + requestUrl + "</td> <td>" + newRequestStatusCode + "</td> <td>" + resultContentLength + "</td></tr>")
-			issue.append(newRequestResult)
-
-		if len(issue) > 0:
-			return issue
-		else:
-			return None
+		return [
+			CustomScanIssue(
+				baseRequestResponse.getHttpService(),
+				self.helpers.analyzeRequest(baseRequestResponse).getUrl(),
+				issueHttpMessages,
+				title,
+				issueDetails,
+				severity,
+			)
+		]
 
 
+	def testQueryBasedIssues(self, baseRequestResponse):
+		results = []
 
+		queryPayloadsFromTable = []
+		for rowIndex in range(self.frm.queryPayloadsTable.getRowCount()):
+			queryPayloadsFromTable.append(str(self.frm.queryPayloadsTable.getValueAt(rowIndex, 0)))
 
-	def doPassiveScan(self, baseRequestResponse):
-		return None
+		for payload in queryPayloadsFromTable:
+			payload = payload.rstrip('\n')
+			result = self.tryBypassWithQueryPayload(baseRequestResponse, payload, baseRequestResponse.getHttpService())
+			results += result
 
-	def doActiveScan(self, baseRequestResponse, insertionPoint, isCalledFromMenu=False):
-		response = self.helpers.analyzeResponse(baseRequestResponse.getResponse())
-		if self.isInteresting(response) == False and isCalledFromMenu == False:
-			return None
-
-		else:
-			issues = self.testRequest(baseRequestResponse)
-			if issues != None:
-				if isCalledFromMenu == True:
-					for i in range(len(issues)):
-						self.callbacks.addScanIssue(issues[i])
-				else:
-					return issues
-			else:
-				return None
-
-	def testRequest(self, baseRequestResponse):
-		queryPayloadsResults = []
-		headerPayloadsResults = []
-		findings = []
-		httpService = baseRequestResponse.getHttpService()
-
-
-		#test for header-based issues
-		global requestNum
-		requestNum = 2
+		return self.makeScanIssueFromResults(
+				baseRequestResponse,
+				results,
+				title="Possible 403 Bypass - Query Based",
+				severity="High",
+				dataHeader="",
+			)
+	
+	def testHeaderBasedPayloads(self, baseRequestResponse):
+		results = []
 
 		headerPayloadsFromTable = []
 		for rowIndex in range(self.frm.headerPayloadsTable.getRowCount()):
@@ -526,72 +529,42 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 
 		for payload in headerPayloadsFromTable:
 			payload = payload.rstrip('\n')
-			result = self.tryBypassWithHeaderPayload(baseRequestResponse, payload, httpService)
-			if result != None:
-				headerPayloadsResults += [result]
+			result = self.tryBypassWithHeaderPayload(baseRequestResponse, payload, baseRequestResponse.getHttpService())
+			results += result
 
-		#process header-based results
+		return self.makeScanIssueFromResults(
+				baseRequestResponse,
+				results,
+				title="Possible 403 Bypass - Header Based",
+				severity="High",
+				dataHeader="Header",
+			)
 
-		if len(headerPayloadsResults) > 0:
-			issueDetails = []
-			issueHttpMessages = []
-			issueHttpMessages.append(baseRequestResponse)
-
-			for issue in headerPayloadsResults:
-				issueDetails.append(issue[0])
-				issueHttpMessages.append(issue[1])
-
-			findings.append(
-				CustomScanIssue(
-				httpService,
-				self.helpers.analyzeRequest(baseRequestResponse).getUrl(),
-				issueHttpMessages,
-				"Possible 403 Bypass - Header Based",
-				"<table><tr><td>Request #</td><td>URL</td><td>Header</td><td>Status Code</td><td>Content Length</td></tr>" + "".join(issueDetails) + "</table>",
-				"High",
-				)
-				)
-			
-		
-		# test for method-based issues
-		# replace GET with POST and empty Content-Length
-		methodResults = []
+	def testMethodBasedIssues(self, baseRequestResponse):
+		results = []
 		methods = [
-			'GET', 'POST', 'OPTIONS', 'TRACE', 'DEBUG', 'HEAD', 'CONNECT'
+			'GET', 'POST', 'OPTIONS', 'TRACE', 'DEBUG', 'HEAD', 'CONNECT',
+			'ASDF' # Try nonsense method.
 		]
 		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
 		requestHeaders = requestInfo.getHeaders()
 		for method in methods:
 			if requestHeaders[0].startswith(method):
 				continue
-			result = self.tryBypassWithMethod(baseRequestResponse, method, httpService)
-			if result != None:
-				methodResults += [result]
+			result = self.tryBypassWithMethod(baseRequestResponse, method, baseRequestResponse.getHttpService())
+			results += result
 
-		if len(methodResults) > 0:
-			issueDetails = []
-			issueHttpMessages = []
-			issueHttpMessages.append(baseRequestResponse)
-
-			for issue in methodResults:
-				issueDetails.append(issue[0])
-				issueHttpMessages.append(issue[1])
-
-			findings.append(
-				CustomScanIssue(
-				httpService,
-				self.helpers.analyzeRequest(baseRequestResponse).getUrl(),
-				issueHttpMessages,
-				"Possible 403 Bypass - Method Based",
-				"<table><tr><td>Request #</td><td>URL</td><td>Method</td><td>Status Code</td><td>Content Length</td></tr>" + "".join(issueDetails) + "</table>",
-				"High",
-				)
-				)
-			
-		
-		# test for agent-based bypasses
-
-		agentResults = []
+		return self.makeScanIssueFromResults(
+				baseRequestResponse,
+				results,
+				title="Possible 403 Bypass - Method Based",
+				severity="High",
+				dataHeader="Method",
+				dedup=False,
+			)
+	
+	def testAgentBasedIssues(self, baseRequestResponse):
+		results = []
 		agents = [
 			# Desktop
 			# Chrome, Windows
@@ -614,100 +587,57 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 			'Mozilla/5.0 (Linux; U; Android 4.0.0; en-us; KFMAWI Build/KM21) AppleWebKit/537.36 (KHTML, like Gecko) Silk/3.49 like Chrome/126.9.768.105 Safari/537.36',
 			'Mozilla/5.0 (Linux; Android 9; JDN2-AL50 Build/HUAWEIJDN2-AL50; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/76.0.3809.89 Mobile Safari/537.36 T7/12.13.0 SP-engine/2.29.0 matrixstyle/0 lite baiduboxapp/5.8.0.10 (Baidu; P1 9) NABar/1.',
 		]
-		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
-		requestHeaders = requestInfo.getHeaders()
 		for agent in agents:
-			if requestHeaders[0].startswith(agent):
-				continue
+			result = self.tryBypassWithUserAgent(baseRequestResponse, agent, baseRequestResponse.getHttpService())
+			results += result
 
-			result = self.tryBypassWithUserAgent(baseRequestResponse, agent, httpService)
-			if result != None:
-				agentResults += [result]
+		return self.makeScanIssueFromResults(
+				baseRequestResponse,
+				results,
+				title="Possible 403 Bypass - Agent Based",
+				severity="High",
+				dataHeader="Agent",
+				dedup=True,
+			)
+	
+	def testDowngradeIssues(self, baseRequestResponse):
+		# change the protocol to HTTP/1.0 and remove all other headers
+		downgradedHttpResults = self.tryBypassWithDowngradedHttpAndNoHeaders(baseRequestResponse, baseRequestResponse.getHttpService())
+		return self.makeScanIssueFromResults(
+				baseRequestResponse,
+				downgradedHttpResults,
+				title="Possible 403 Bypass - Downgraded HTTP Version",
+				severity="High",
+				dataHeader="",
+				dedup=False,
+			)
 
-		if len(agentResults) > 0:
-			issueDetails = []
-			issueHttpMessages = []
-			issueHttpMessages.append(baseRequestResponse)
+	def doPassiveScan(self, baseRequestResponse):
+		return None
 
-			for issue in agentResults:
-				issueDetails.append(issue[0])
-				issueHttpMessages.append(issue[1])
-
-			findings.append(
-				CustomScanIssue(
-				httpService,
-				self.helpers.analyzeRequest(baseRequestResponse).getUrl(),
-				issueHttpMessages,
-				"Possible 403 Bypass - Method Based",
-				"<table><tr><td>Request #</td><td>URL</td><td>Method</td><td>Status Code</td><td>Content Length</td></tr>" + "".join(issueDetails) + "</table>",
-				"High",
-				)
-				)
-		
-
-		
-		# test for protocol-based issues
-		#change the protocol to HTTP/1.0 and remove all other headers
-		downgradedHttpResult = self.tryBypassWithDowngradedHttpAndNoHeaders(baseRequestResponse, httpService)
-		if downgradedHttpResult != None:
-			issueDetails = []
-			issueHttpMessages = []
-
-			issueHttpMessages.append(baseRequestResponse)
-			issueDetails.append(downgradedHttpResult[0])
-			issueHttpMessages.append(downgradedHttpResult[1])
-
-			findings.append(
-				CustomScanIssue(
-				httpService,
-				self.helpers.analyzeRequest(baseRequestResponse).getUrl(),
-				issueHttpMessages,
-				"Possible 403 Bypass - Downgraded HTTP Version",
-				"<table><tr><td>Request #</td><td>URL</td><td>Status Code</td><td>Content Length</td></tr>" + "".join(issueDetails) + "</table>",
-				"High",
-				)
-				)
-
-
-		#test for query-based issues
-		queryPayloadsFromTable = []
-		for rowIndex in range(self.frm.queryPayloadsTable.getRowCount()):
-			queryPayloadsFromTable.append(str(self.frm.queryPayloadsTable.getValueAt(rowIndex, 0)))
-
-		for payload in queryPayloadsFromTable:
-			payload = payload.rstrip('\n')
-			result = self.tryBypassWithQueryPayload(baseRequestResponse, payload, httpService)
-			if result != None:
-				queryPayloadsResults += result
-
-		#process query-based results
-		if len(queryPayloadsResults) > 0:
-			issueDetails = []
-			issueHttpMessages = []
-			issueHttpMessages.append(baseRequestResponse)
-
-			for issue in queryPayloadsResults:
-				issueDetails.append(issue[0])
-				issueHttpMessages.append(issue[1])
-
-
-			findings.append(
-				CustomScanIssue(
-				httpService,
-				self.helpers.analyzeRequest(baseRequestResponse).getUrl(),
-				issueHttpMessages,
-				"Possible 403 Bypass",
-				"<table><tr><td>Request #</td><td>URL</td><td>Status Code</td><td>Content Length</td></tr>" + "".join(issueDetails) + "</table>",
-				"High",
-				)
-				)
-
-
-		if findings:
-			return findings
-		else:
+	def doActiveScan(self, baseRequestResponse, insertionPoint, isCalledFromMenu=False):
+		response = self.helpers.analyzeResponse(baseRequestResponse.getResponse())
+		if self.isInteresting(response) == False and isCalledFromMenu == False:
 			return None
 
+		issues = self.testRequest(baseRequestResponse)
+		if len(issues) == 0:
+			return None
+		
+		if isCalledFromMenu == False:
+			return issues
+		
+		for issue in issues:
+			self.callbacks.addScanIssue(issue)
+
+	def testRequest(self, baseRequestResponse):
+		findings = []
+		findings += self.testHeaderBasedPayloads(baseRequestResponse)
+		findings += self.testMethodBasedIssues(baseRequestResponse)
+		findings += self.testAgentBasedIssues(baseRequestResponse)
+		findings += self.testDowngradeIssues(baseRequestResponse)
+		findings += self.testQueryBasedIssues(baseRequestResponse)
+		return findings
 
 	def consolidateDuplicateIssues(self, existingIssue, newIssue):
 		if (existingIssue.getIssueDetail() == newIssue.getIssueDetail()):
