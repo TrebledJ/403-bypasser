@@ -700,7 +700,7 @@ class CustomScanIssue (IScanIssue):
 		return "Tentative"
 
 	def getIssueBackground(self):
-		return extentionName + " sent a request and got 403 response. " + extentionName + " sent another request and got 2XX-3XX response, this may indicate a misconfiguration on the server side that allows access to forbidden pages."
+		return extentionName + " sent a request and got a 2XX-3XX response. This may indicate a misconfiguration on the server side that allows access to forbidden pages."
 
 	def getRemediationBackground(self):
 		pass
