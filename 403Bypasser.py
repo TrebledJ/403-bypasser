@@ -500,6 +500,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 			return []
 	
 		if dedup:
+			# TODO: dedup but also report issue details so that user is aware of changes.
 			results = Result.deduplicateResults(results)
 
 		issueHttpMessages = [baseRequestResponse] + [res.httpRequestResponse for res in results]
