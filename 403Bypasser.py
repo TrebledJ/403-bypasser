@@ -263,7 +263,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 
 		originalRequest = self.helpers.bytesToString(request.getRequest())
 		for pathToTest in payloads:
-			headers[0] = firstline.replace(requestPath, pathToTest)
+			headers[0] = firstline.replace(requestPath, pathToTest, 1)
 			headersAsJavaSublist = ArrayList()
 			for header in headers:
 				headersAsJavaSublist.add(String(header))
@@ -282,7 +282,8 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 
 			if newRequestStatusCode == "200":
 				originalRequestUrl = str(request.getUrl())
-				vulnerableReuqestUrl = originalRequestUrl.replace(requestPath,pathToTest)
+				scheme, urlWithoutScheme = originalRequestUrl.split("://")
+				vulnerableReuqestUrl = scheme + "://" + urlWithoutScheme.replace(requestPath, pathToTest, 1)
 
 				responseHeaders = str(self.helpers.analyzeResponse(newRequestResult.getResponse()).getHeaders()).split(",")
 				resultContentLength = "No CL in response"
