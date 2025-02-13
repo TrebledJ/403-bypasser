@@ -293,8 +293,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 
 	def isInteresting(self, responseInfo):
 		responseCode = responseInfo.getStatusCode()
-		# TODO: extend scope of interesting responses
-		return responseCode == 403
+		return responseCode == 401 or responseCode == 403
 
 	def findAllCharIndexesInString(self,s, ch):
 		return [i for i, ltr in enumerate(s) if ltr == ch]
