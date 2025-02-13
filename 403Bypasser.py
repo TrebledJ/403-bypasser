@@ -287,9 +287,18 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		return None
 
 
-	def isPositive(self, responseInfo):
-		responseCode = responseInfo.getStatusCode()
-		return responseCode < 400
+	def isPositive(self, baseRequestResponse, newRequestResponse):
+		ogResp = baseRequestResponse.getResponse()
+		ogRespInfo = self.helpers.analyzeResponse(ogResp)
+		ogRespCode = ogRespInfo.getStatusCode()
+		ogRespSize = len(self.helpers.bytesToString(ogResp)) - ogRespInfo.getBodyOffset()
+
+		newResp =newRequestResponse.getResponse()
+		newRespInfo = self.helpers.analyzeResponse(newResp)
+		newRespCode = newRespInfo.getStatusCode()
+		newRespSize = len(self.helpers.bytesToString(newResp)) - newRespInfo.getBodyOffset()
+
+		return newRespCode < 400 and (ogRespCode != newRespCode or ogRespSize != newRespSize)
 
 	def isInteresting(self, responseInfo):
 		responseCode = responseInfo.getStatusCode()
@@ -341,17 +350,17 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 		return hdrsArrayList
 
 
-	def tryBypassWithQueryPayload(self, request, payload, httpService):
+	def tryBypassWithQueryPayload(self, baseRequestResponse, payload, httpService):
 		results = []
 
-		requestPath = request.getUrl().getPath()
+		requestPath = baseRequestResponse.getUrl().getPath()
 		payloads = self.generatePayloads(requestPath, payload)
 
-		requestInfo = self.helpers.analyzeRequest(request)
+		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
 		headers = requestInfo.getHeaders()
 		firstline = headers[0]
 
-		originalRequest = self.helpers.bytesToString(request.getRequest())
+		originalRequest = self.helpers.bytesToString(baseRequestResponse.getRequest())
 		for pathToTest in payloads:
 			headers[0] = firstline.replace(requestPath, pathToTest, 1)
 			requestBody = originalRequest[requestInfo.getBodyOffset():]
@@ -363,7 +372,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 				print("No response from server: (path-based bypass) {}".format(headers[0]))
 				continue
 
-			if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
+			if self.isPositive(baseRequestResponse, newRequestResponse):
 				results.append(Result(
 					url=pathToTest.replace(payload, "<b>" + payload + "</b>"),
 					data="",
@@ -388,7 +397,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 			print("No response from server: (header-based bypass) {}".format(payload))
 			return []
 
-		if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
+		if self.isPositive(baseRequestResponse, newRequestResponse):
 			return [
 				Result(
 					url=str(baseRequestResponse.getUrl().getPath()),
@@ -417,7 +426,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 			print("No response from server: (method-based bypass) {}".format(method))
 			return []
 
-		if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
+		if self.isPositive(baseRequestResponse, newRequestResponse):
 			return [
 				Result(
 					url=str(baseRequestResponse.getUrl().getPath()),
@@ -431,7 +440,6 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 
 
 	def tryBypassWithUserAgent(self, baseRequestResponse, agent, httpService):
-		headerAlreadyAdded = False
 		requestInfo = self.helpers.analyzeRequest(baseRequestResponse)
 		headers = requestInfo.getHeaders()
 		headers = self.addOrReplaceHeader(headers, 'User-Agent: {}'.format(agent))
@@ -444,7 +452,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 			print("No response from server: (agent-based bypass) {}".format(agent))
 			return []
 
-		if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
+		if self.isPositive(baseRequestResponse, newRequestResponse):
 			return [
 				Result(
 					url=str(baseRequestResponse.getUrl().getPath()),
@@ -473,7 +481,7 @@ class BurpExtender(IBurpExtender, IScannerCheck, IContextMenuFactory, ITab):
 			print("No response from server: (downgrade bypass)")
 			return []
 
-		if self.isPositive(self.helpers.analyzeResponse(newRequestResponse.getResponse())):
+		if self.isPositive(baseRequestResponse, newRequestResponse):
 			return [
 				Result(
 					url=str(baseRequestResponse.getUrl().getPath()),
